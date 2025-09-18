@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="DH.css">
+    <title>Điều khiển IoT qua TCP/IP</title>
+</head>
+<body>
+    <div class="connection-panel">
+        <h3>Thiết lập kết nối</h3>
+        <div class="form-group">
+            <label for="ipAddress">Địa chỉ IP:</label>
+            <input type="text" id="ipAddress" placeholder="192.168.1.100" value="192.168.1.100">
+        </div>
+        <div class="form-group">
+            <label for="port">Port:</label>
+            <input type="number" id="port" placeholder="80" value="80">
+        </div>
+        <div class="form-group">
+            <label for="deviceId">ID Thiết bị:</label>
+            <input type="text" id="deviceId" placeholder="iot-device-001" value="iot-device-001">
+        </div>
+        <button id="connectBtn" class="btn-connect" onclick="toggleConnection()">Kết nối</button>
+    </div>
+
+    <div class="control-panel">
+        <button class="btn-on" onclick="sendCommand('ON')" id="btnOn">BẬT</button>
+        <button class="btn-off" onclick="sendCommand('OFF')" id="btnOff">TẮT</button>
+    </div>
+
+    <div>
+        <h3>Lệnh tùy chỉnh:</h3>
+        <input type="text" id="customCommand" placeholder="Nhập lệnh (VD: LED_ON, PUMP_START, etc.)">
+        <button onclick="sendCustomCommand()" class="btn-custom">Gửi lệnh</button>
+    </div>
+
+    <div id="status" class="status disconnected">Chưa kết nối</div>
+
+    <script>
+        let isConnected = false;
+        let currentEndpoint = '';
+        
+        // Cập nhật endpoint dựa trên IP và Port
+        function updateEndpoint() {
+            const ip = document.getElementById('ipAddress').value.trim();
+            const port = document.getElementById('port').value.trim();
+            currentEndpoint = `http://${ip}:${port}/api/iot/command`;
+            return currentEndpoint;
+        }
+        
+        // Lấy thông tin thiết bị
+        function getDeviceId() {
+            return document.getElementById('deviceId').value.trim();
+        }
+        
+        // Kết nối/ngắt kết nối
+        function toggleConnection() {
+            if (isConnected) {
+                disconnect();
+            } else {
+                connect();
+            }
+        }
+        
+        function connect() {
+            updateEndpoint();
+            const ip = document.getElementById('ipAddress').value.trim();
+            const port = document.getElementById('port').value.trim();
+            
+            if (!ip || !port) {
+                showStatus('Vui lòng nhập đầy đủ IP và Port', 'error');
+                return;
+            }
+            
+            // Kiểm tra kết nối bằng ping
+            checkConnection()
+                .then(() => {
+                    isConnected = true;
+                    updateUI();
+                    showStatus(`✅ Đã kết nối tới ${ip}:${port}`, 'success');
+                })
+                .catch(error => {
+                    showStatus(`❌ Không thể kết nối tới ${ip}:${port}`, 'error');
+                    console.error('Lỗi kết nối:', error);
+                });
+        }
+        
+        function disconnect() {
+            isConnected = false;
+            updateUI();
+            showStatus('🔌 Đã ngắt kết nối', 'disconnected');
+        }
+        
+        // Kiểm tra kết nối
+        async function checkConnection() {
+            const testEndpoint = updateEndpoint().replace('/api/iot/command', '');
+            
+            try {
+                const response = await fetch(testEndpoint, {
+                    method: 'GET',
+                    mode: 'no-cors', // Cho phép kiểm tra kết nối cross-origin
+                    cache: 'no-cache'
+                });
+                return true;
+            } catch (error) {
+                // Thử kết nối trực tiếp tới endpoint
+                try {
+                    const response = await fetch(updateEndpoint(), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            command: 'PING',
+                            timestamp: new Date().toISOString(),
+                            deviceId: getDeviceId()
+                        })
+                    });
+                    return response.ok;
+                } catch (e) {
+                    throw new Error('Cannot connect to device');
+                }
+            }
+        }
+        
+        // Gửi lệnh tới thiết bị
+        async function sendCommand(command) {
+            if (!isConnected) {
+                showStatus('Vui lòng kết nối trước khi gửi lệnh', 'error');
+                return;
+            }
+            
+            showStatus(`📤 Đang gửi lệnh: ${command}...`, 'loading');
+            
+            try {
+                const response = await fetch(updateEndpoint(), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        command: command,
+                        timestamp: new Date().toISOString(),
+                        deviceId: getDeviceId()
+                    })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    showStatus(`✅ Đã gửi: ${command} | ${result.message || 'Thành công'}`, 'success');
+                } else {
+                    showStatus(`❌ Lỗi ${response.status}: ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`❌ Lỗi kết nối: ${error.message}`, 'error');
+                console.error('Lỗi:', error);
+                // Tự động ngắt kết nối nếu có lỗi
+                disconnect();
+            }
+        }
+
+        function sendCustomCommand() {
+            const command = document.getElementById('customCommand').value.trim();
+            if (command) {
+                sendCommand(command);
+                document.getElementById('customCommand').value = '';
+            } else {
+                showStatus('Vui lòng nhập lệnh', 'error');
+            }
+        }
+
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            
+            // Tự động ẩn thông báo sau 5 giây (trừ lỗi)
+            if (type !== 'error') {
+                setTimeout(() => {
+                    if (statusDiv.textContent === message) {
+                        statusDiv.textContent = isConnected ? 'Đã kết nối' : 'Chưa kết nối';
+                        statusDiv.className = `status ${isConnected ? 'success' : 'disconnected'}`;
+                    }
+                }, 5000);
+            }
+        }
+        
+        function updateUI() {
+            const connectBtn = document.getElementById('connectBtn');
+            const btnOn = document.getElementById('btnOn');
+            const btnOff = document.getElementById('btnOff');
+            
+            if (isConnected) {
+                connectBtn.textContent = 'Ngắt kết nối';
+                connectBtn.className = 'btn-disconnect';
+                btnOn.disabled = false;
+                btnOff.disabled = false;
+            } else {
+                connectBtn.textContent = 'Kết nối';
+                connectBtn.className = 'btn-connect';
+                btnOn.disabled = true;
+                btnOff.disabled = true;
+            }
+        }
+
+        // Phím tắt
+        document.addEventListener('keydown', (e) => {
+            if (e.key === '1') sendCommand('ON');
+            if (e.key === '0') sendCommand('OFF');
+            if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                toggleConnection();
+            }
+        });
+        
+        // Khởi tạo UI
+        updateUI();
+    </script>
+</body>
+</html>
